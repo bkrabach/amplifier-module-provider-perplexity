@@ -230,7 +230,7 @@ class TestSDKResponseConversion:
 
         response = self.provider._convert_sdk_response(mock_response, "sonar")
 
-        assert response.model == "sonar"
+        assert response.metadata["perplexity:model"] == "sonar"
         assert "The capital of France is Paris." in response.content[0].text
         assert response.usage.input_tokens == 10
         assert response.usage.output_tokens == 20
@@ -255,7 +255,7 @@ class TestSDKResponseConversion:
 
         response = self.provider._convert_sdk_response(mock_response, "sonar")
 
-        assert response.stop_reason == "max_tokens"
+        assert response.finish_reason == "length"
 
     def test_convert_response_stop_reason_stop(self) -> None:
         """Stop finish reason should map to end_turn."""
@@ -263,7 +263,7 @@ class TestSDKResponseConversion:
 
         response = self.provider._convert_sdk_response(mock_response, "sonar")
 
-        assert response.stop_reason == "end_turn"
+        assert response.finish_reason == "stop"
 
     def test_convert_empty_choices(self) -> None:
         """Empty choices should return empty content."""
@@ -321,9 +321,10 @@ class TestModelListing:
         """Set up test provider instance."""
         self.provider = PerplexityProvider(api_key="test-key")
 
-    def test_list_models_returns_expected_models(self) -> None:
+    @pytest.mark.asyncio
+    async def test_list_models_returns_expected_models(self) -> None:
         """list_models() should return all expected models."""
-        models = self.provider.list_models()
+        models = await self.provider.list_models()
         model_ids = [m.id for m in models]
 
         assert "sonar" in model_ids
@@ -333,9 +334,10 @@ class TestModelListing:
         assert "sonar-deep-research" in model_ids
         assert "r1-1776" in model_ids
 
-    def test_sonar_model_capabilities(self) -> None:
+    @pytest.mark.asyncio
+    async def test_sonar_model_capabilities(self) -> None:
         """Sonar model should have correct capabilities."""
-        models = self.provider.list_models()
+        models = await self.provider.list_models()
         sonar = next(m for m in models if m.id == "sonar")
 
         assert sonar.context_window == 128000
@@ -344,18 +346,20 @@ class TestModelListing:
         assert "citations" in sonar.capabilities
         assert "streaming" in sonar.capabilities
 
-    def test_sonar_pro_model_capabilities(self) -> None:
+    @pytest.mark.asyncio
+    async def test_sonar_pro_model_capabilities(self) -> None:
         """Sonar Pro model should have enhanced capabilities."""
-        models = self.provider.list_models()
+        models = await self.provider.list_models()
         sonar_pro = next(m for m in models if m.id == "sonar-pro")
 
         assert sonar_pro.context_window == 200000
         assert sonar_pro.max_output_tokens == 8192
         assert "deep_search" in sonar_pro.capabilities
 
-    def test_r1_model_is_offline(self) -> None:
+    @pytest.mark.asyncio
+    async def test_r1_model_is_offline(self) -> None:
         """R1-1776 model should be offline (no web search)."""
-        models = self.provider.list_models()
+        models = await self.provider.list_models()
         r1 = next(m for m in models if m.id == "r1-1776")
 
         assert "offline" in r1.capabilities
@@ -437,7 +441,7 @@ class TestConfiguration:
         assert provider.default_model == "sonar"
         assert provider.max_tokens == 4096
         assert provider.temperature == 0.7
-        assert provider.timeout == 60.0
+        assert provider.timeout is None
         assert provider.max_retries == 2
 
     def test_custom_configuration(self) -> None:
@@ -471,18 +475,19 @@ class TestMount:
         monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key-from-env")
 
         from amplifier_module_provider_perplexity import mount
-        from amplifier_core import TestCoordinator
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
 
-        coordinator = TestCoordinator()
+        coordinator = SimpleNamespace(
+            mount=AsyncMock(), hooks=SimpleNamespace(emit=AsyncMock())
+        )
         cleanup = await mount(coordinator, {})
 
         assert cleanup is not None
         # Verify provider was mounted
-        assert any(
-            entry.get("name") == "perplexity"
-            for entry in coordinator.mount_history
-            if entry.get("mount_point") == "providers"
-        )
+        coordinator.mount.assert_awaited_once()
+        assert coordinator.mount.call_args.args[0] == "providers"
+        assert coordinator.mount.call_args.kwargs["name"] == "perplexity"
 
         # Cleanup
         await cleanup()
@@ -493,9 +498,12 @@ class TestMount:
         monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
 
         from amplifier_module_provider_perplexity import mount
-        from amplifier_core import TestCoordinator
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
 
-        coordinator = TestCoordinator()
+        coordinator = SimpleNamespace(
+            mount=AsyncMock(), hooks=SimpleNamespace(emit=AsyncMock())
+        )
         result = await mount(coordinator, {})
 
         assert result is None

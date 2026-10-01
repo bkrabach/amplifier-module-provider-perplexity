@@ -205,3 +205,13 @@ Errors that are not retried:
 ## License
 
 MIT
+
+### Completion waits
+
+Healthy model requests have no default read/elapsed deadline. Explicit `timeout`
+configuration remains supported; connection and pool acquisition stay bounded.
+Cancellation propagates. Slow generation is not evidence of a broken service.
+Per-call options can be supplied in `request_options`; explicit keyword arguments
+take precedence over that mapping.
+
+`raw: true` enables full redacted request capture on the standard `llm:request` event. It defaults to false.

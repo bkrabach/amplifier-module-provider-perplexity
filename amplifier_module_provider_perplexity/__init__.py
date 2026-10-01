@@ -21,6 +21,7 @@ import perplexity
 from perplexity import AsyncPerplexity
 
 from amplifier_core import ConfigField, ModelInfo, ModuleCoordinator, ProviderInfo
+from amplifier_core.utils import redact_secrets
 from amplifier_core.message_models import (
     ChatRequest,
     ChatResponse,
@@ -74,7 +75,9 @@ class PerplexityProvider:
         self.temperature: float = self.config.get("temperature", 0.7)
 
         # HTTP settings (passed to SDK)
-        self.timeout: float = self.config.get("timeout", 60.0)
+        # Healthy generation is cancellable but has no implicit read deadline.
+        # Slow responses must not be mistaken for a broken service.
+        self.timeout: float | None = self.config.get("timeout")
         self.max_retries: int = self.config.get("max_retries", 2)
 
         # Perplexity-specific search settings
@@ -92,6 +95,9 @@ class PerplexityProvider:
 
         # Debug mode
         self.debug: bool = self.config.get("debug", False)
+        self.raw: bool = self.config.get("raw", False)
+        if type(self.raw) is not bool:
+            raise ValueError("raw must be a boolean")
 
     @property
     def client(self) -> AsyncPerplexity:
@@ -108,7 +114,7 @@ class PerplexityProvider:
                 raise ValueError("api_key must be provided for API calls")
             self._client = AsyncPerplexity(
                 api_key=self._api_key,
-                timeout=self.timeout,
+                timeout=perplexity.Timeout(self.timeout, connect=5.0, pool=5.0),
                 max_retries=self.max_retries,
             )
         return self._client
@@ -171,7 +177,7 @@ class PerplexityProvider:
             ],
         )
 
-    def list_models(self) -> list[ModelInfo]:
+    async def list_models(self) -> list[ModelInfo]:
         """List available Perplexity models.
 
         Returns:
@@ -242,12 +248,22 @@ class PerplexityProvider:
             perplexity.APIError: On API errors after retries exhausted.
             ValueError: If API key is not configured.
         """
+        request_options = kwargs.pop("request_options", None)
+        if request_options is not None:
+            from collections.abc import Mapping
+
+            if not isinstance(request_options, Mapping):
+                raise ValueError("request_options must be a mapping or None")
+            kwargs = {**request_options, **kwargs}
+
         # Convert messages to Perplexity format
         system_prompt, messages = self._convert_messages(request.messages)
 
         # Build request parameters
         model = kwargs.get("model") or request.model or self.default_model
-        max_tokens = kwargs.get("max_tokens") or request.max_tokens or self.max_tokens
+        max_tokens = (
+            kwargs.get("max_tokens") or request.max_output_tokens or self.max_tokens
+        )
         temperature = (
             kwargs.get("temperature")
             if kwargs.get("temperature") is not None
@@ -257,17 +273,6 @@ class PerplexityProvider:
                 else self.temperature
             )
         )
-
-        # Emit request event if coordinator available
-        if self.coordinator:
-            await self.coordinator.emit(
-                "llm:request",
-                {
-                    "provider": self.name,
-                    "model": model,
-                    "messages_count": len(messages),
-                },
-            )
 
         # Build web search options
         web_search_options: dict[str, Any] = {}
@@ -298,21 +303,30 @@ class PerplexityProvider:
                 sdk_messages.append({"role": "system", "content": system_prompt})
             sdk_messages.extend(messages)
 
-            # Call the SDK
-            response = await self.client.chat.completions.create(
+            params = dict(
                 model=model,
                 messages=sdk_messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 web_search_options=web_search_options if web_search_options else None,
             )
+            if self.coordinator and hasattr(self.coordinator, "hooks"):
+                event = {
+                    "provider": self.name,
+                    "model": model,
+                    "messages_count": len(sdk_messages),
+                }
+                if self.raw:
+                    event["raw"] = redact_secrets(params)
+                await self.coordinator.hooks.emit("llm:request", event)
+            response = await self.client.chat.completions.create(**params)
 
             # Convert SDK response to ChatResponse
             chat_response = self._convert_sdk_response(response, model)
 
             # Emit response event
-            if self.coordinator:
-                await self.coordinator.emit(
+            if self.coordinator and hasattr(self.coordinator, "hooks"):
+                await self.coordinator.hooks.emit(
                     "llm:response",
                     {
                         "provider": self.name,
@@ -473,20 +487,22 @@ class PerplexityProvider:
             )
 
         # Determine stop reason
-        stop_reason = "end_turn"
+        stop_reason = "stop"
         if response.choices and response.choices[0].finish_reason:
             finish_reason = response.choices[0].finish_reason
             if finish_reason == "length":
-                stop_reason = "max_tokens"
+                stop_reason = "length"
             elif finish_reason == "stop":
-                stop_reason = "end_turn"
+                stop_reason = "stop"
 
         return ChatResponse(
-            id=response.id or "pplx-response",
-            model=response.model or model,
             content=[TextBlock(type="text", text=full_content)],
-            stop_reason=stop_reason,
+            finish_reason=stop_reason,
             usage=usage,
+            metadata={
+                "perplexity:response_id": response.id,
+                "perplexity:model": response.model or model,
+            },
         )
 
 
