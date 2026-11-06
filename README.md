@@ -194,7 +194,7 @@ request = ChatRequest(
     messages=[
         Message(role="user", content="What are the latest developments in quantum computing?")
     ],
-    max_tokens=2000,
+    max_output_tokens=2000,
 )
 
 # Get response with citations
