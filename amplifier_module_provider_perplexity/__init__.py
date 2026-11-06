@@ -15,10 +15,12 @@ Example:
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import Any
 
 import perplexity
 from perplexity import AsyncPerplexity
+from ._model_listing import ModelFilters, selector_schema
 
 from amplifier_core import ConfigField, ModelInfo, ModuleCoordinator, ProviderInfo
 from amplifier_core.utils import redact_secrets
@@ -68,6 +70,9 @@ class PerplexityProvider:
         self._client: AsyncPerplexity | None = None
         self.config = config or {}
         self.coordinator = coordinator
+        self._model_filters = ModelFilters.parse(self.config.get("model_filters", {
+            "include": ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
+        }))
 
         # Model and generation settings
         self.default_model: str = self.config.get("default_model", "sonar")
@@ -177,13 +182,29 @@ class PerplexityProvider:
             ],
         )
 
-    async def list_models(self) -> list[ModelInfo]:
-        """List available Perplexity models.
+    def get_model_list_info(self) -> dict[str, Any]:
+        """Describe a static adapter catalog, not account/API enumeration."""
+        return {
+            "version": 1,
+            "source": "static",
+            "filters_keyword": "filters",
+            "filters_schema": selector_schema(),
+            "default_filters": self._model_filters.as_dict(),
+            "unfiltered": {},
+            "override": "replace",
+        }
 
-        Returns:
-            List of ModelInfo for each supported model.
+    async def list_models(
+        self, *, filters: Mapping[str, object] | None = None
+    ) -> list[ModelInfo]:
+        """Return filtered static metadata; never contacts the API.
+
+        None uses configured defaults. An explicit mapping replaces them;
+        {} exposes the entire static catalog, including legacy model IDs.
+        Listing is a recommendation only and does not gate exact inference.
         """
-        return [
+        policy = self._model_filters if filters is None else ModelFilters.parse(filters)
+        models = [
             ModelInfo(
                 id="sonar",
                 display_name="Sonar",
@@ -233,6 +254,8 @@ class PerplexityProvider:
                 capabilities=["offline"],
             ),
         ]
+        selected = set(policy.select([model.id for model in models]))
+        return [model for model in models if model.id in selected]
 
     async def complete(self, request: ChatRequest, **kwargs: Any) -> ChatResponse:
         """Complete a chat request using Perplexity API.

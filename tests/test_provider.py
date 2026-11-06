@@ -323,16 +323,16 @@ class TestModelListing:
 
     @pytest.mark.asyncio
     async def test_list_models_returns_expected_models(self) -> None:
-        """list_models() should return all expected models."""
+        """No-argument listing recommends the approved Sonar families."""
         models = await self.provider.list_models()
         model_ids = [m.id for m in models]
 
         assert "sonar" in model_ids
         assert "sonar-pro" in model_ids
-        assert "sonar-reasoning" in model_ids
+        assert "sonar-reasoning" not in model_ids
         assert "sonar-reasoning-pro" in model_ids
         assert "sonar-deep-research" in model_ids
-        assert "r1-1776" in model_ids
+        assert "r1-1776" not in model_ids
 
     @pytest.mark.asyncio
     async def test_sonar_model_capabilities(self) -> None:
@@ -359,7 +359,7 @@ class TestModelListing:
     @pytest.mark.asyncio
     async def test_r1_model_is_offline(self) -> None:
         """R1-1776 model should be offline (no web search)."""
-        models = await self.provider.list_models()
+        models = await self.provider.list_models(filters={})
         r1 = next(m for m in models if m.id == "r1-1776")
 
         assert "offline" in r1.capabilities
