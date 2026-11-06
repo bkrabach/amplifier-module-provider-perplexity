@@ -119,7 +119,11 @@ class PerplexityProvider:
                 raise ValueError("api_key must be provided for API calls")
             self._client = AsyncPerplexity(
                 api_key=self._api_key,
-                timeout=perplexity.Timeout(self.timeout, connect=5.0, pool=5.0),
+                timeout=(
+                    self.timeout
+                    if self.timeout is not None
+                    else perplexity.Timeout(None, connect=5.0, pool=5.0)
+                ),
                 max_retries=self.max_retries,
             )
         return self._client
@@ -333,6 +337,8 @@ class PerplexityProvider:
                 temperature=temperature,
                 web_search_options=web_search_options if web_search_options else None,
             )
+            if "timeout" in kwargs:
+                params["timeout"] = kwargs["timeout"]
             if self.coordinator and hasattr(self.coordinator, "hooks"):
                 event = {
                     "provider": self.name,
