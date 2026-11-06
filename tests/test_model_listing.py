@@ -1,8 +1,8 @@
 """Static recommendations, immutable overrides, and exact native SDK inference."""
 import json
+import importlib
 import pytest
 import perplexity
-import httpx2
 from amplifier_core import ModelInfo
 from amplifier_core.message_models import ChatRequest, Message
 from amplifier_module_provider_perplexity import PerplexityProvider
@@ -46,17 +46,22 @@ def test_invalid_config(filters):
 
 @pytest.mark.asyncio
 async def test_explicit_hidden_model_reaches_sdk_with_exact_options():
+    transport_module = "httpx2" if any(
+        cls.__module__.startswith("httpx2")
+        for cls in perplexity.DefaultAsyncHttpxClient.__mro__
+    ) else "httpx"
+    http = importlib.import_module(transport_module)
     seen = []
     def handle(request):
         seen.append(json.loads(request.content))
-        return httpx2.Response(200, json={
+        return http.Response(200, json={
             "id": "test", "model": "r1-1776", "created": 1,
             "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         })
     provider = PerplexityProvider(api_key="fixture-only", config={"model_filters": {"include": []}})
     provider._client = perplexity.AsyncPerplexity(api_key="fixture-only", max_retries=0,
-        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handle)))
+        http_client=http.AsyncClient(transport=http.MockTransport(handle)))
     try:
         assert await provider.list_models() == []
         await provider.complete(ChatRequest(messages=[Message(role="user", content="test")],
