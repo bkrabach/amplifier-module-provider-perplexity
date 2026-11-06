@@ -92,7 +92,29 @@ config:
   max_retries: 3
 ```
 
-## Available Models
+## Static model recommendations
+
+`await provider.list_models()` recommends `sonar`, `sonar-pro`,
+`sonar-reasoning-pro`, and `sonar-deep-research`. This is a **static adapter
+catalog**, not current account entitlement or API enumeration. Existing metadata
+below is retained; listing makes no API call and does not validate server availability.
+
+`get_model_list_info()` reports `source: "static"` and the optional v1 filter
+schema. `config.model_filters` is snapshotted on construction. Passing
+`filters=None` uses that policy; an explicit mapping **replaces** it:
+
+```python
+await provider.list_models(filters={})  # all six static entries, including legacy IDs
+await provider.list_models(filters={"include": ["R1-*"]})  # r1-1776
+await provider.list_models(filters={"include": []})  # []
+await provider.list_models(filters={"include": ["SONAR*"], "exclude": ["*-pro"]})
+```
+
+Include/exclude use case-insensitive, OS-independent globs; exclusion wins.
+`hide_dated` optionally suppresses YYYY-MM-DD snapshots with selected aliases.
+Unknown filter keys or invalid values are rejected, not silently ignored.
+Filtering never changes `default_model` or blocks an exact model passed to
+`complete`; the remote service remains authoritative about availability.
 
 | Model | Context Window | Max Output | Capabilities |
 |-------|---------------|------------|--------------|
@@ -172,7 +194,7 @@ request = ChatRequest(
     messages=[
         Message(role="user", content="What are the latest developments in quantum computing?")
     ],
-    max_tokens=2000,
+    max_output_tokens=2000,
 )
 
 # Get response with citations
@@ -205,3 +227,13 @@ Errors that are not retried:
 ## License
 
 MIT
+
+### Completion waits
+
+Healthy model requests have no default read/elapsed deadline. Explicit `timeout`
+configuration remains supported; connection and pool acquisition stay bounded.
+Cancellation propagates. Slow generation is not evidence of a broken service.
+Per-call options can be supplied in `request_options`; explicit keyword arguments
+take precedence over that mapping.
+
+`raw: true` enables full redacted request capture on the standard `llm:request` event. It defaults to false.
